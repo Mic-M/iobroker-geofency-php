@@ -77,8 +77,7 @@ Wasn't that difficult, right? Now try with your mobile device to enter and leave
 * [Stele99](https://www.symcon.de/forum/threads/23348-Geofency-mit-Webhook?p=212154#post212154) for the PHP script idea
 
 ## Changelog
-### 0.1 (29-Jun-2018)
-* (Mic-M) Initial Release
+See script.
 
 ## Licence
 
