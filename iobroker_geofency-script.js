@@ -9,33 +9,34 @@
  * ioBroker states accordingly.
  *
  * Visit https://github.com/Mic-M/iobroker.geofency-php for details.
+ * Support: https://forum.iobroker.net/viewtopic.php?f=21&t=15187
  *  
  * Change Log
- *  - 0.1  Mic - Initial release 
- * 
+ *  0.2  Mic - Bug fix
+ *  0.1  Mic - Initial release 
  *******************************************************************************************/
 
 
 ////////////////////////// CONFIGURATION ///////////////////////////////////////
 
 // List of users (devices) we support. States will be created for each user
-var m_UserList = ["John", "Lisa"];   // For example:  ["John", "Jenny", "Pete"]
+const USER_LIST = ["John", "Lisa"];   // For example:  ["John", "Jenny", "Pete"]
 
-// URL to the Geofency folder on the webspace. Dont add "http://" or ""https://"".
-var m_URL       = 'mywebspace.de/geofency/'; // e.g. 'myserver.com/tools/geofency/'; Add a trailing slash!
-
-// http or https
-var m_http      = 'http';
+// URL to the Geofency folder on the webserver. Dont add "http://" or ""https://"".
+const URL_WEBSERVER = 'mywebspace.de/geofency/'; // e.g. 'myserver.com/tools/geofency/'; Add a trailing slash!
 
 // User name and password for Basic Authentification on your webserver
-var m_username  = 'john';
-var m_password  = 'secret-password';
+const USER_NAME_WEBSERVER  = 'john';
+const PASSWORD_WEBSERVER  = 'secret-password';
 
 // Path to the Geofency states in ioBroker
-var m_path      = 'javascript.0.geofency';
+const STATE_PATH      = 'javascript.' + instance + '.' + 'geofency.';
 
 // How often do you want to fetch the log file content? Use the button "Cron" on the top right corner...
-var m_schedule  = "*/2 * * * *"; // every 2 minutes
+const LOG_SCHEDULE  = "*/2 * * * *"; // alle 2 Minuten.
+
+// Extended logging for debugging
+const LOGGING = false;
 
 
 ////////////////////////// Stop editing here ///////////////////////////////////
@@ -48,18 +49,17 @@ var m_schedule  = "*/2 * * * *"; // every 2 minutes
 init();
 function init() {
     // Create user states needed
-    for (var i in m_UserList) {
-        m_CreateStatesForUser(m_UserList[i]); 
+    for (var i in USER_LIST) {
+        createStatesUser(USER_LIST[i]); 
     }
 
     // Create states for everyone
-    m_CreateStatesForEveryone();
+    createStatesEveryone();
 
     // Schedule script to fetch data every x seconds, minutes, etc. for each device
-    // We use setTimeout() to execute 5s later and avoid error message on initial start if states not yet created.
     setTimeout(function() {
-        schedule(m_schedule, function () {
-           m_GetGeofencyDataFromPHP(); 
+        schedule(LOG_SCHEDULE, function () {
+           main(); 
         });
     }, 5000);
 
@@ -69,74 +69,79 @@ function init() {
 /**
  * Main function which fetches the log file entries and updates the states in ioBroker
  */
-function m_GetGeofencyDataFromPHP() {
+function main() {
 
-    var statusURL = 'http://' + m_username + ":" + m_password + '@' + m_URL + 'geofency.log';
+    var statusURL = 'http://' + USER_NAME_WEBSERVER + ":" + PASSWORD_WEBSERVER + '@' + URL_WEBSERVER + 'geofency.log';
 
     var thisRequest = require("request");
 
     var thisOptions = {
       uri: statusURL,
       method: "GET",
-      timeout: 1000,
+      timeout: 5000,
       followRedirect: false,
       maxRedirects: 0
     };
 
     thisRequest(thisOptions, function(error, response, body) {
         if (!error && response.statusCode == 200) {
-
+            if (LOGGING) log('Geofency-Script: http request ausgeführt, kein Fehler dabei.')
             // get log entries into array, these are separated by new line in the file...
             var logArray = body.split(/\r?\n/); 
             
             // We process each log entry
             for (var i in logArray) {
-
+                if (LOGGING) log('Logdatei von Server wird abgearbeitet.')
                 // we check if we have a correct log entry, we check for term "Longitude"...
                 if (logArray[i].includes('"Longitude"')) {
-                    
+                    if (LOGGING) log('Validen Logeintrag gefunden:' + logArray[i])
                     // Here we have the log entry as JSON object.
-                    jsonObjLoop = JSON.parse(logArray[i]);
+                    var jsonObjLoop = JSON.parse(logArray[i]);
 
                     // Set states if something new happened
-                    if(getState(m_path + '.' + m_SanitizeString(jsonObjLoop.Device) + '.dateMostRecent').val !== jsonObjLoop.LogDate) {
-
+                    if(getState(STATE_PATH + m_SanitizeString(jsonObjLoop.Device) + '.dateMostRecent').val !== jsonObjLoop.LogDate) {
+                        if (LOGGING) log('Der gefundene Log-Eintrag ist neu.')
                         // 0 - get a few states before we change these
-                        var bUserAtHomeBefore = getState(m_path + '.' + m_SanitizeString(jsonObjLoop.Device) + '.atHome').val;
-                        var intAtHomeBeforeCount = getState(m_path + '.allAtHomeCount').val;
-                        
-                       // 1 - States for person
-                        setState(m_path + '.' + m_SanitizeString(jsonObjLoop.Device) + '.dateMostRecent', jsonObjLoop.LogDate);
-                        if(jsonObjLoop.Entry === '1') setState(m_path + '.' + m_SanitizeString(jsonObjLoop.Device) + '.dateLastEntry', jsonObjLoop.LogDate);
-                        if(jsonObjLoop.Entry === '0') setState(m_path + '.' + m_SanitizeString(jsonObjLoop.Device) + '.dateLastLeave', jsonObjLoop.LogDate);
-                        if(jsonObjLoop.Entry === '1') {
-                            setState(m_path + '.' + m_SanitizeString(jsonObjLoop.Device) + '.atHome', true);
-                        } else {
-                            setState(m_path + '.' + m_SanitizeString(jsonObjLoop.Device) + '.atHome', false);
-                        }                         
-                        
-                        // 2 - States for everyone: Users
-                        var currUsers = getState(m_path + '.allAtHomePersons').val;
-                        var newUsers;
-                        if (jsonObjLoop.Entry === '1') {
-                            newUsers = m_AddOrRemoveUser(currUsers, jsonObjLoop.Device, true);
-                        } else {
-                            newUsers = m_AddOrRemoveUser(currUsers, jsonObjLoop.Device, false);
-                        }                
-                        setState(m_path + '.allAtHomePersons', JSON.stringify(newUsers));                        
+                        var bUserAtHomeBefore    = getState(STATE_PATH + m_SanitizeString(jsonObjLoop.Device) + '.atHome').val;
+                        var intAtHomeBeforeCount = getState(STATE_PATH + 'allAtHomeCount').val;
+                        var currUsers            = getState(STATE_PATH + 'allAtHomePersons').val;                        
 
+                       setTimeout(function() { // Delay of 1 second to make sure we have all states from above in the variables
 
-                        // 3 - States for everyone: Count
-                        setState(m_path + '.allAtHomeCount', newUsers.length);
+                           // 1 - States for person
+                            setState(STATE_PATH + m_SanitizeString(jsonObjLoop.Device) + '.dateMostRecent', jsonObjLoop.LogDate);
+                            if (LOGGING) log('Akuelles Datum setzen für ' + m_SanitizeString(jsonObjLoop.Device) + ': ' + jsonObjLoop.LogDate);
+                            if(jsonObjLoop.Entry === '1') setState(STATE_PATH + m_SanitizeString(jsonObjLoop.Device) + '.dateLastEntry', jsonObjLoop.LogDate);
+                            if(jsonObjLoop.Entry === '0') setState(STATE_PATH + m_SanitizeString(jsonObjLoop.Device) + '.dateLastLeave', jsonObjLoop.LogDate);
+                            if(jsonObjLoop.Entry === '1') {
+                                setState(STATE_PATH + m_SanitizeString(jsonObjLoop.Device) + '.atHome', true);
+                                if (LOGGING) log('At-Home-Status für ' + m_SanitizeString(jsonObjLoop.Device) + ' auf "true" gesetzt.');
+                            } else {
+                                setState(STATE_PATH + m_SanitizeString(jsonObjLoop.Device) + '.atHome', false);
+                                if (LOGGING) log('At-Home-Status für ' + m_SanitizeString(jsonObjLoop.Device) + ' auf "false" gesetzt.');
+                            }                         
+                            
+                            // 2 - States for everyone: Users
+                            var newUsers;
+                            if (jsonObjLoop.Entry === '1') {
+                                newUsers = m_AddOrRemoveUser(currUsers, jsonObjLoop.Device, true);
+                            } else {
+                                newUsers = m_AddOrRemoveUser(currUsers, jsonObjLoop.Device, false);
+                            }                
+                            setState(STATE_PATH + 'allAtHomePersons', JSON.stringify(newUsers));                        
+                            if (LOGGING) log('State "allAtHomePersons" gesetzt mit: ' + JSON.stringify(newUsers));
+    
+                            // 3 - States for everyone: Count
+                            setState(STATE_PATH + 'allAtHomeCount', newUsers.length);
+    
+                            // Finally
+                            if(jsonObjLoop.Entry === '1') {
+                                log('Geofency: ' + jsonObjLoop.Device + ' arrived at home.');
+                            } else {
+                                log('Geofency: ' + jsonObjLoop.Device + ' left the home.');
+                            }                        
 
-
-                        // Finally
-                        if(jsonObjLoop.Entry === '1') {
-                            m_Log('Geofency: ' + jsonObjLoop.Device + ' arrived at home.');
-                        } else {
-                            m_Log('Geofency: ' + jsonObjLoop.Device + ' left the home.');
-                        }                        
-
+                       }, 1000);
 
                     }
                 }
@@ -144,7 +149,7 @@ function m_GetGeofencyDataFromPHP() {
         }
         else
         {
-            m_Log('Fehler bei http Request aufgetreten: ' + error, 'error');
+            m_Log('Fehler bei http Request aufgetreten: ' + error, 'warn');
         }
     });
 
@@ -153,9 +158,9 @@ function m_GetGeofencyDataFromPHP() {
 /**
  * Create states: for everyone
  */
-function m_CreateStatesForEveryone() {
+function createStatesEveryone() {
 
-    createState(m_path + '.allAtHomeCount', {
+    createState(STATE_PATH + 'allAtHomeCount', {
             "name": 'How many persons are at home',
             "type": "number",
             "def": 0,
@@ -163,7 +168,7 @@ function m_CreateStatesForEveryone() {
             "write": true
     });
 
-    createState(m_path + '.allAtHomePersons', {
+    createState(STATE_PATH + 'allAtHomePersons', {
             "name": 'Who is currently at home',
             "type": "string",
             "def": '',
@@ -177,31 +182,30 @@ function m_CreateStatesForEveryone() {
 /**
  * Create states for a certain device
  */
-function m_CreateStatesForUser(strDevice) {
+function createStatesUser(strDevice) {
 
-    // Datenpunkte erstellen
-    createState(m_path + '.' + m_SanitizeString(strDevice) + '.dateMostRecent', {
+    createState(STATE_PATH + m_SanitizeString(strDevice) + '.dateMostRecent', {
             "name": 'Date of most recent entry or leave',
             "type": "string",
             "def": '',
             "read": true,
             "write": true
     });
-    createState(m_path + '.' + m_SanitizeString(strDevice) + '.dateLastEntry', {
+    createState(STATE_PATH + m_SanitizeString(strDevice) + '.dateLastEntry', {
             "name": 'Date of last ENTRY',
             "type": "string",
             "def": '',
             "read": true,
             "write": true
     });
-    createState(m_path + '.' + m_SanitizeString(strDevice) + '.dateLastLeave', {
+    createState(STATE_PATH + m_SanitizeString(strDevice) + '.dateLastLeave', {
             "name": 'Date of last LEAVE',
             "type": "string",
             "def": '',
             "read": true,
             "write": true
     });
-    createState(m_path + '.' + m_SanitizeString(strDevice) + '.atHome', {
+    createState(STATE_PATH + m_SanitizeString(strDevice) + '.atHome', {
             "name": 'Current at home status - true if yes, false if not',
             "type": "boolean",
             "def": '',
@@ -220,9 +224,13 @@ function m_CreateStatesForUser(strDevice) {
  */
 function m_AddOrRemoveUser(aUserList, strUser, bAdd){
 
+    if (LOGGING) log('Funktion "m_AddOrRemoveUser", übergebener Wert "aUserList": ' + JSON.stringify(aUserList));
+    if (LOGGING) log('Funktion "m_AddOrRemoveUser", übergebener Wert "strUser": ' + strUser);
+    if (LOGGING) log('Funktion "m_AddOrRemoveUser", übergebener Wert "bAdd": ' + bAdd);
+
     // Prepare Array
     var aUserListM;
-    if (aUserList === '') {
+    if (m_myIsValueEmptyNullUndefined(aUserList)) {
       aUserListM = [];  
     } else {
         aUserListM = JSON.parse(aUserList);
@@ -278,11 +286,11 @@ function m_SanitizeString(strInput) {
 
 /**
  * Logs a message
- * @param string strMessage - die Message
- * @param string strType - don't add if [info], use "warn" for [warn] and "error" for [error]
+ * @param {string} strMessage - die Message
+ * @param {string} strType - don't add if [info], use "warn" for [warn] and "error" for [error]
  */
 function m_Log(strMessage, strType) {
-    strMsgFinal = '[M] *** ' + strMessage + ' ***';
+    var strMsgFinal = '[M] *** ' + strMessage + ' ***';
     if (strType === "error") {
         log(strMsgFinal, "error");
     } else if (strType === "warn") {
@@ -292,3 +300,24 @@ function m_Log(strMessage, strType) {
     }
 }
 
+/**
+ * Checks if Array or String is not undefined, null or empty.
+ * @param inputVar - Input Array or String, Number, etc.
+ * @return true if it is undefined/null/empty, false if it contains value(s)
+ * Array or String containing just whitespaces or >'< or >"< is considered empty
+ */
+function m_myIsValueEmptyNullUndefined(inputVar) {
+    if (typeof inputVar !== 'undefined' && inputVar !== null) {
+        var strTemp = JSON.stringify(inputVar);
+        strTemp = strTemp.replace(/\s+/g, ''); // remove all whitespaces
+        strTemp = strTemp.replace(/\"+/g, "");  // remove all >"<
+        strTemp = strTemp.replace(/\'+/g, "");  // remove all >'<  
+        if (strTemp !== '') {
+            return false;            
+        } else {
+            return true;
+        }
+    } else {
+        return true;
+    }
+}
